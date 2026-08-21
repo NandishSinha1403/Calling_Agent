@@ -272,13 +272,24 @@ _(Update this section as you go so future sessions pick up where you left off.)_
 - [x] Repo initialized; `main` + `develop`; issue-per-feature + Projects board
 - [x] Step 0 skeleton — pinned `requirements.txt`, `app/config.py`,
       `.env.example`, `tests/test_config.py` (6 passing)
-- [ ] Isolated Gemini Live test passing (mic + `--wav`) — **hard gate**
-- [ ] Audio utils written + unit-tested
-- [ ] FastAPI skeleton (`/call`, `/twiml`, `/ws/media-stream`) with echo stub
-- [ ] Full bridge wired, first successful end-to-end test call
-- [ ] Barge-in confirmed (talking over the agent cuts its audio)
-- [ ] Example tool call confirmed working over a live call
-- [ ] README verified by following it fresh
+- [x] Isolated Gemini Live test passing (`--wav`; mic mode not yet run by a human)
+- [x] Audio utils written + unit-tested (15 tests)
+- [x] FastAPI skeleton (`/call`, `/twiml`, `/ws/media-stream`) with echo stub
+- [x] Full bridge wired and verified through the public ngrok tunnel
+- [x] Barge-in confirmed (`clear` event reaches Twilio)
+- [x] Example tool call confirmed over the bridge (`log_ticket`, priority from context)
+- [x] README written to the PRD's bar
+- [ ] **One real PSTN call** — everything above ran over real WebSockets with
+      real audio, but not down a phone line
+
+**Testing without spending trial minutes:** `tests/simulate_twilio_call.py`
+speaks Twilio's Media Stream protocol directly, so the whole pipeline including
+barge-in can be exercised for free. Trial voice time is ~75 minutes total —
+reserve it for PSTN audio quality and true end-to-end latency, which cannot be
+simulated.
+
+**Measured latency** (end of speech to first audio byte): ~900ms isolated,
+~1800ms isolated with a tool call, ~2500ms through the full bridge.
 
 **Phase B — WhatsApp** (blocked until every Phase A box is ticked)
 
