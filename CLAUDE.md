@@ -265,39 +265,60 @@ blocks the isolated Gemini test or a voice call, and vice versa.
 
 ## Current state
 
-_(Update this section as you go so future sessions pick up where you left off.)_
+**Phase A — Voice: built and merged.** 76 tests passing.
 
-**Phase A — Voice** (must be complete before Phase B begins)
+- [x] Isolated Gemini Live test passing (`--wav`; ~1300ms end-of-speech to first audio)
+- [x] Audio utils + 15 unit tests
+- [x] FastAPI skeleton, echo stub, Twilio Media Stream simulator
+- [x] Full bridge, verified through the public ngrok tunnel
+- [x] Barge-in confirmed (`clear` reaches the client)
+- [x] Tool calls confirmed over the bridge, priority derived from speech
+- [x] Browser demo at `/demo` — talk to the agent with no telephony provider
+- [ ] A real PSTN call — **blocked on provider billing, not on our code**
 
-- [x] Repo initialized; `main` + `develop`; issue-per-feature + Projects board
-- [x] Step 0 skeleton — pinned `requirements.txt`, `app/config.py`,
-      `.env.example`, `tests/test_config.py` (6 passing)
-- [x] Isolated Gemini Live test passing (`--wav`; mic mode not yet run by a human)
-- [x] Audio utils written + unit-tested (15 tests)
-- [x] FastAPI skeleton (`/call`, `/twiml`, `/ws/media-stream`) with echo stub
-- [x] Full bridge wired and verified through the public ngrok tunnel
-- [x] Barge-in confirmed (`clear` event reaches Twilio)
-- [x] Example tool call confirmed over the bridge (`log_ticket`, priority from context)
-- [x] README written to the PRD's bar
-- [ ] **One real PSTN call** — everything above ran over real WebSockets with
-      real audio, but not down a phone line
+**Phase B — WhatsApp: built and merged, NOT yet verified.**
+Needs the Sandbox webhook pointed at `{BASE_URL}/whatsapp/incoming` and someone
+to text `join <code>`. Voice taught us that unverified means unknown.
 
-**Testing without spending trial minutes:** `tests/simulate_twilio_call.py`
-speaks Twilio's Media Stream protocol directly, so the whole pipeline including
-barge-in can be exercised for free. Trial voice time is ~75 minutes total —
-reserve it for PSTN audio quality and true end-to-end latency, which cannot be
-simulated.
+### Telephony is blocked by account limits, not by this codebase
 
-**Measured latency** (end of speech to first audio byte): ~900ms isolated,
-~1800ms isolated with a tool call, ~2500ms through the full bridge.
+- **Twilio**: Media Streams is paid-only. Measured, not inferred — pointing
+  `<Connect><Stream>` at a public WebSocket service failed too, which cleared
+  both our endpoint and the tunnel.
+- **Telnyx**: pre-trial cannot verify destination numbers, and outbound needs a
+  verified number. Same wall, different place.
+- Upgrading **Twilio** is the cheaper unblock: everything is already built
+  against it, so it is a billing change and zero code changes. Telnyx would cost
+  money *and* a port.
 
-**Phase B — WhatsApp** (blocked until every Phase A box is ticked)
+### OPEN BUG — the browser demo answers once, then stops
 
-- [ ] `core/gemini_text.py` sharing `persona.py` + `tools.py`
-- [ ] `channels/whatsapp/` — webhook, client, session store
-- [ ] Window-expiry + session-keying unit tests passing offline
-- [ ] Multi-turn WhatsApp conversation with a tool call firing
-- [ ] WhatsApp README section
+Symptom (session at 22:58 in the logs): the greeting plays correctly, the
+caller's audio arrives at healthy levels (peak RMS 7907, 6935, 5284, with real
+silence gaps between), but the agent never replies to what was said. No
+`caller:` input transcript is logged either.
+
+What is already ruled out:
+- The mu-law codec — the browser's encoder matches `audioop` across all 65,536
+  samples, asserted by a test.
+- Audio reaching the bridge — the RMS figures above are measured after
+  conversion, so the format and levels are right.
+- The bridge itself — the simulator gets 1029 frames of agent audio back over
+  the same endpoint, with the greeting enabled.
+
+So the difference is something about the browser's audio specifically, not the
+pipeline it feeds. Next things to try, cheapest first: compare the browser's
+frame timing against the simulator's (the capture loop resamples with a
+fractional ratio when the device runs at 44.1kHz, which drifts); dump what the
+browser sends to a WAV and play it; and check whether server-side VAD is seeing
+end-of-turn at all by logging `turn_complete`.
+
+**Testing without spending money:** `tests/simulate_twilio_call.py` speaks
+Twilio's Media Stream protocol directly, including `--interrupt-wav` for
+barge-in, so the whole pipeline can be exercised for free.
+
+**Measured latency** (end of speech to first audio byte): ~900-1300ms isolated,
+~2500-3800ms through the full bridge.
 
 **The test that matters most:** rewrite `core/persona.py` and `core/tools.py`
 for an invented problem statement and confirm both channels adopt it with zero
