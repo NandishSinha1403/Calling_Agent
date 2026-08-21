@@ -95,6 +95,12 @@ def log_ticket(summary: str, priority: str = "normal") -> dict[str, Any]:
     }
     _TICKETS.append(ticket)
     log.info("TOOL log_ticket -> %s", json.dumps(ticket, ensure_ascii=False))
+    # Surface tool activity to anything watching the call live. Imported here
+    # rather than at module scope to keep tools.py free of infrastructure
+    # imports at the top -- this file is meant to be readable by someone
+    # writing a new tool under time pressure.
+    from app.event_bus import publish
+    publish("tool", name="log_ticket", **ticket)
     print(f"\n  [TOOL] log_ticket: {json.dumps(ticket, ensure_ascii=False)}\n")
     return {"status": "recorded", **ticket}
 

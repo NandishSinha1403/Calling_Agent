@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.channels.voice.main import router as voice_router
+from app.channels.browser.main import router as browser_router
 from app.channels.telnyx.webhook import router as telnyx_router
 from app.channels.whatsapp.main import router as whatsapp_router
 from app.config import ConfigError, settings
@@ -49,6 +50,7 @@ app = FastAPI(
 app.include_router(voice_router)
 app.include_router(whatsapp_router)
 app.include_router(telnyx_router)
+app.include_router(browser_router)
 
 
 @app.get("/health")
