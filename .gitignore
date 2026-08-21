@@ -1,0 +1,22 @@
+# Secrets — never commit. .env holds live Twilio + Gemini credentials.
+.env
+
+# Virtualenv
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Audio scratch files from the isolated test
+*.wav
+
+# macOS
+.DS_Store
+
+# Reference material — marked "Confidential — Internal Use Only".
+# This repo is public; keep it local.
+Samadhan_AI_Complete_Reference.pdf
