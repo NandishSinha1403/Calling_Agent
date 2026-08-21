@@ -91,6 +91,21 @@ async def twiml(mode: str = "") -> Response:
         log.error("Cannot build TwiML: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    if mode == "external":
+        # Diagnostic: point <Stream> at a PUBLIC WebSocket service instead of our
+        # ngrok tunnel. This isolates one variable — if Twilio can open a stream
+        # to somewhere else, the fault is our tunnel; if it cannot open one
+        # anywhere, the restriction is on Twilio's side.
+        external = os.getenv("EXTERNAL_WS", "wss://ws.postman-echo.com/raw")
+        log.info("Serving DIAGNOSTIC external <Stream> -> %s", external)
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                f'<Response><Connect><Stream url="{external}" /></Connect></Response>'
+            ),
+            media_type="application/xml",
+        )
+
     if mode == "start":
         # Diagnostic: <Start><Stream> is one-way (caller audio to us, nothing
         # back) and is a DIFFERENT Twilio feature path from <Connect><Stream>.
