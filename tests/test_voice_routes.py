@@ -58,13 +58,21 @@ def _media(payload: bytes) -> str:
     )
 
 
-def test_echo_returns_audio_with_stream_sid(client):
+@pytest.fixture
+def echo_client(monkeypatch):
+    """Echo mode is a diagnostic fallback now, not the default."""
+    monkeypatch.setenv("BASE_URL", "https://example.ngrok-free.app")
+    monkeypatch.setenv("ECHO_MODE", "1")
+    return TestClient(app)
+
+
+def test_echo_returns_audio_with_stream_sid(echo_client):
     """Outbound media must carry the streamSid or Twilio silently drops it.
 
     That is a classic 'call connects but caller hears nothing' cause, so it is
     asserted here rather than discovered on a phone.
     """
-    with client.websocket_connect("/ws/media-stream") as ws:
+    with echo_client.websocket_connect("/ws/media-stream") as ws:
         ws.send_text(json.dumps({"event": "connected", "protocol": "Call"}))
         ws.send_text(json.dumps({"event": "start", "start": {"streamSid": "MZ123"}}))
         ws.send_text(_media(b"\xff" * 160))
@@ -75,17 +83,17 @@ def test_echo_returns_audio_with_stream_sid(client):
         assert base64.b64decode(reply["media"]["payload"]) == b"\xff" * 160
 
 
-def test_media_before_start_is_dropped_not_crashed(client):
+def test_media_before_start_is_dropped_not_crashed(echo_client):
     """Audio can arrive before the start event; it must not kill the socket."""
-    with client.websocket_connect("/ws/media-stream") as ws:
+    with echo_client.websocket_connect("/ws/media-stream") as ws:
         ws.send_text(_media(b"\x00" * 160))  # no streamSid known yet
         ws.send_text(json.dumps({"event": "start", "start": {"streamSid": "MZ9"}}))
         ws.send_text(_media(b"\x7f" * 160))
         assert json.loads(ws.receive_text())["streamSid"] == "MZ9"
 
 
-def test_stop_event_closes_cleanly(client):
-    with client.websocket_connect("/ws/media-stream") as ws:
+def test_stop_event_closes_cleanly(echo_client):
+    with echo_client.websocket_connect("/ws/media-stream") as ws:
         ws.send_text(json.dumps({"event": "start", "start": {"streamSid": "MZ1"}}))
         ws.send_text(json.dumps({"event": "stop"}))
 
