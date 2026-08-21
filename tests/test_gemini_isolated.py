@@ -95,27 +95,45 @@ async def run_wav(path: Path, out_path: Path) -> None:
         _banner(f"WAV  ({path.name}, {seconds:.1f}s)", session.model)
         started = time.monotonic()
 
-        # Stream in real time rather than dumping the file at once: server-side
-        # VAD decides the turn ended from the silence that follows, and a
-        # firehose gives it nothing resembling real speech timing.
-        step = CHUNK_FRAMES * 2
-        for i in range(0, len(pcm), step):
-            await session.send_audio(pcm[i : i + step])
-            await asyncio.sleep(CHUNK_FRAMES / SEND_SAMPLE_RATE)
-
-        first_audio_at: float | None = None
         chunks: list[bytes] = []
-        async for kind, payload in session.events():
-            if kind == "audio":
-                if first_audio_at is None:
-                    first_audio_at = time.monotonic()
-                chunks.append(payload)
-            elif kind == "input_transcript":
-                print(f"  you:   {payload}", flush=True)
-            elif kind == "transcript":
-                print(f"  agent: {payload}", flush=True)
-            elif kind == "turn_complete":
-                break
+        state: dict[str, float | None] = {"first_audio_at": None}
+        done = asyncio.Event()
+
+        async def send() -> None:
+            # Stream in real time rather than dumping the file at once: server-side
+            # VAD decides the turn ended from the silence that follows, and a
+            # firehose gives it nothing resembling real speech timing.
+            step = CHUNK_FRAMES * 2
+            for i in range(0, len(pcm), step):
+                await session.send_audio(pcm[i : i + step])
+                await asyncio.sleep(CHUNK_FRAMES / SEND_SAMPLE_RATE)
+            # A real call keeps streaming silence and VAD hears the pause. A
+            # file just stops, so say so explicitly or the model waits forever.
+            await session.end_audio_stream()
+
+        async def receive() -> None:
+            async for kind, payload in session.events():
+                if kind == "audio":
+                    if state["first_audio_at"] is None:
+                        state["first_audio_at"] = time.monotonic()
+                    chunks.append(payload)
+                elif kind == "input_transcript":
+                    print(f"  you:   {payload}", flush=True)
+                elif kind == "transcript":
+                    print(f"  agent: {payload}", flush=True)
+                elif kind == "turn_complete":
+                    done.set()
+                    return
+
+        # These MUST run concurrently. Sending several seconds of audio without
+        # draining the socket leaves the server's messages (VAD signals,
+        # transcription, the start of the reply) with no reader, and the session
+        # is closed with a 1008. The real Twilio bridge has the same requirement.
+        async with asyncio.TaskGroup() as tg:
+            receiver = tg.create_task(receive())
+            tg.create_task(send())
+            await done.wait()
+            receiver.cancel()
 
     if chunks:
         with wave.open(str(out_path), "wb") as wf:
@@ -125,7 +143,7 @@ async def run_wav(path: Path, out_path: Path) -> None:
             wf.writeframes(b"".join(chunks))
         print(f"\n  wrote {out_path} ({sum(map(len, chunks)) / (RECV_SAMPLE_RATE * 2):.1f}s)")
 
-    _report(first_audio_at, started)
+    _report(state["first_audio_at"], started)
 
 
 # ---------------------------------------------------------------------------
