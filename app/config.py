@@ -125,6 +125,40 @@ class Settings:
             f"BASE_URL must start with https://, got: {url}"
         )
 
+    # --- Telnyx: alternative voice provider ---------------------------
+    # Kept alongside Twilio rather than replacing it, so the two can be
+    # compared and either can be used without a code change.
+
+    @property
+    def telnyx_api_key(self) -> str:
+        return _require(
+            "TELNYX_API_KEY",
+            "Telnyx Console -> Account -> API Keys (starts KEY...)",
+        )
+
+    @property
+    def telnyx_connection_id(self) -> str:
+        return _require(
+            "TELNYX_CONNECTION_ID",
+            "Telnyx Console -> Voice -> Applications -> your app's Connection ID",
+        )
+
+    @property
+    def telnyx_phone_number(self) -> str:
+        return _require(
+            "TELNYX_PHONE_NUMBER",
+            "A Voice-capable Telnyx number in E.164 format, e.g. +15551234567",
+        )
+
+    def require_telnyx(self) -> None:
+        """Fail now if anything needed for a Telnyx call is missing."""
+        _ = (
+            self.telnyx_api_key,
+            self.telnyx_connection_id,
+            self.telnyx_phone_number,
+            self.websocket_url,
+        )
+
     def require_gemini(self) -> None:
         """Fail now if the Gemini config is incomplete."""
         _ = self.gemini_api_key

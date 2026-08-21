@@ -19,8 +19,11 @@ websockets==16.1.1
 # webhook receive form-encoded bodies rather than JSON.
 python-multipart==0.0.32
 
-# --- Telephony: outbound PSTN calls via the Twilio REST API ---
+# --- Telephony: outbound PSTN calls ---
 twilio==9.11.0
+# Telnyx is the fallback provider: Twilio gates Media Streams behind a paid
+# account, and Telnyx uses the same connected/start/media/stop event shape.
+telnyx==4.175.0
 
 # --- Config ---
 python-dotenv==1.2.3
