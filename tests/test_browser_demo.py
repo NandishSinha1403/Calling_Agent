@@ -9,6 +9,7 @@ audioop across the full sample range.
 
 import audioop
 import json
+import math
 
 import pytest
 from fastapi.testclient import TestClient
@@ -148,3 +149,68 @@ def test_slow_subscriber_never_blocks_publish():
         await agen.aclose()
 
     asyncio.run(main())
+
+
+# ---------------------------------------------------------------------------
+# The capture worklet's resampler
+# ---------------------------------------------------------------------------
+# Ported from the AudioWorklet in demo.html, for the same reason the codec is:
+# a subtle fault here produces audio that measures a healthy RMS while being
+# full of gaps, which speech recognition cannot parse. The agent then hears
+# "something loud" and never replies -- a symptom that looks like a model
+# problem and is really a resampling one.
+
+def worklet_resample(chunks, device_rate: int) -> list[float]:
+    """Line-for-line port of CaptureProcessor.process() in demo.html."""
+    ratio = device_rate / 8000
+    tail: list[float] = []
+    frac = 0.0
+    out: list[float] = []
+
+    for chunk in chunks:
+        buf = tail + list(chunk)
+        pos = frac
+        while pos + ratio <= len(buf):
+            lo, hi = int(pos), int(pos + ratio)
+            window = buf[lo:hi]
+            out.append(sum(window) / len(window) if window else 0.0)
+            pos += ratio
+        keep = int(pos)
+        tail = buf[keep:]
+        frac = pos - keep
+    return out
+
+
+def _sine_blocks(rate: int, seconds: float, hz: int = 440, amp: float = 0.3):
+    """One second of audio in 128-sample blocks, as a worklet receives it."""
+    total = int(rate * seconds)
+    samples = [amp * math.sin(2 * math.pi * hz * i / rate) for i in range(total)]
+    return [samples[i : i + 128] for i in range(0, len(samples), 128)]
+
+
+@pytest.mark.parametrize("device_rate", [48000, 44100, 16000])
+def test_worklet_resamples_to_realtime_8khz(device_rate):
+    """One second in must be one second out, or audio drifts over a long call."""
+    out = worklet_resample(_sine_blocks(device_rate, 1.0), device_rate)
+    assert abs(len(out) - 8000) < 130, f"{len(out)} samples from 1s at {device_rate}Hz"
+
+
+@pytest.mark.parametrize("device_rate", [48000, 44100])
+def test_worklet_output_is_continuous(device_rate):
+    """No gaps at buffer boundaries.
+
+    An earlier version carried a NEGATIVE offset between buffers, which read
+    past the start of the array and wrote zeros into the stream. RMS stayed
+    healthy and the audio was unintelligible -- the hardest kind of bug to see.
+    A clean 440Hz sine at 8kHz cannot step by more than about 0.11 of full
+    scale between samples.
+    """
+    out = worklet_resample(_sine_blocks(device_rate, 1.0), device_rate)
+    largest = max(abs(b - a) for a, b in zip(out, out[1:]))
+    assert largest < 0.15, f"discontinuity of {largest:.3f} at {device_rate}Hz"
+
+
+def test_worklet_preserves_loudness():
+    out = worklet_resample(_sine_blocks(48000, 1.0), 48000)
+    rms = math.sqrt(sum(s * s for s in out) / len(out))
+    assert rms == pytest.approx(0.3 / math.sqrt(2), rel=0.05)

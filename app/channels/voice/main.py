@@ -24,6 +24,7 @@ import base64
 import json
 import logging
 import os
+import wave
 
 from fastapi import APIRouter, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -32,6 +33,7 @@ from app.channels.voice.audio_utils import (
     TWILIO_FRAME_BYTES,
     CallAudioBridge,
     pcm16_rms,
+    ulaw_to_pcm16,
 )
 from app.channels.voice.twilio_call import trigger_call
 from app.config import ConfigError, settings
@@ -212,6 +214,14 @@ async def media_stream(ws: WebSocket) -> None:
         if sid:
             await ws.send_text(json.dumps({"event": "clear", "streamSid": sid}))
 
+    # Optional: keep a copy of exactly what the caller sent us, so a call that
+    # "sounded fine but the agent ignored it" can be listened to afterwards.
+    # RMS proves audio is arriving and at what level; it says nothing about
+    # whether the audio is CONTINUOUS, and choppy audio reads as healthy RMS
+    # while being unintelligible to speech recognition.
+    dump: list[bytes] = []
+    dumping = os.getenv("DUMP_AUDIO", "").strip() in {"1", "true", "yes"}
+
     async def from_twilio(session: GeminiLiveSession) -> None:
         """Read Twilio events; convert and forward caller audio to Gemini."""
         while True:
@@ -225,6 +235,8 @@ async def media_stream(ws: WebSocket) -> None:
             elif event == "media":
                 state["frames_in"] = int(state["frames_in"]) + 1
                 ulaw = base64.b64decode(message["media"]["payload"])
+                if dumping:
+                    dump.append(ulaw)
                 pcm16k = audio.caller_to_gemini(ulaw)
                 # Loudness tracking. A connected-but-silent call is nearly
                 # always a format error, and this shows whether the caller's
@@ -306,6 +318,15 @@ async def media_stream(ws: WebSocket) -> None:
             state["frames_out"],
         )
         publish("call_ended", frames_in=state["frames_in"], frames_out=state["frames_out"])
+        if dumping and dump:
+            path = "inbound_audio.wav"
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(8000)
+                wf.writeframes(ulaw_to_pcm16(b"".join(dump)))
+            log.info("Wrote %s (%d frames) -- play it to hear what we received",
+                     path, len(dump))
 
 
 async def _run_echo(ws: WebSocket) -> None:

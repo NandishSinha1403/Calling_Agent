@@ -216,7 +216,7 @@ async function start() {
     statusEl.textContent = 'live — speak now';
     btn.disabled = false; btn.textContent = 'Stop'; btn.className = 'stop';
     log('media stream open (streamSid ' + streamSid.slice(0, 12) + '…)');
-    beginCapture();
+    beginCapture().catch(e => log('capture failed: ' + e.message));
   };
 
   ws.onmessage = ev => {
@@ -247,47 +247,100 @@ async function start() {
 
 // ---------------------------------------------------------------------------
 // Capture: device rate -> 8kHz -> mu-law -> 20ms frames.
-// Averaging while downsampling rather than picking every Nth sample: naive
+//
+// Runs in an AudioWorklet, on the audio rendering thread. The obvious
+// alternative, ScriptProcessorNode, runs on the MAIN thread alongside base64
+// encoding, JSON serialisation and WebSocket sends. Under that load it drops
+// callbacks, and dropped callbacks produce audio that still measures a healthy
+// RMS while being full of gaps -- which speech recognition cannot parse, so the
+// agent hears "something loud" and never responds. That failure looks like a
+// model problem and is really a scheduling one.
+//
+// The worklet only resamples and encodes. Everything expensive (base64, JSON,
+// the socket) stays on the main thread, where it belongs.
+//
+// Averaging while downsampling rather than taking every Nth sample: naive
 // decimation aliases higher frequencies back into the voice band.
 // ---------------------------------------------------------------------------
-function beginCapture() {
+const WORKLET_SRC = `
+class CaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / ${TWILIO_RATE};
+    this.tail = new Float32Array(0);   // input samples not yet consumed
+    this.frac = 0;                     // sub-sample phase carried across buffers
+    this.pending = [];
+  }
+  process(inputs) {
+    const input = inputs[0][0];
+    if (!input) return true;
+
+    // Join whatever was left over to the new buffer. Resampling across a
+    // boundary without this drops or repeats samples, and the resulting clicks
+    // are exactly what makes audio measure loud while being unintelligible.
+    const buf = new Float32Array(this.tail.length + input.length);
+    buf.set(this.tail, 0);
+    buf.set(input, this.tail.length);
+
+    let peak = 0, pos = this.frac;
+    while (pos + this.ratio <= buf.length) {
+      const from = Math.floor(pos), to = Math.floor(pos + this.ratio);
+      let sum = 0, n = 0;
+      for (let j = from; j < to; j++, n++) sum += buf[j];
+      const s = Math.max(-1, Math.min(1, n ? sum / n : 0));
+      if (Math.abs(s) > peak) peak = Math.abs(s);
+      this.pending.push(s);
+      pos += this.ratio;
+    }
+    // Keep the unconsumed remainder, and the sub-sample phase within it.
+    const keep = Math.floor(pos);
+    this.tail = buf.slice(keep);
+    this.frac = pos - keep;
+
+    while (this.pending.length >= ${FRAME}) {
+      const frame = this.pending.splice(0, ${FRAME});
+      const pcm = new Int16Array(${FRAME});
+      for (let i = 0; i < ${FRAME}; i++) {
+        pcm[i] = Math.round(frame[i] < 0 ? frame[i] * 0x8000 : frame[i] * 0x7fff);
+      }
+      this.port.postMessage({ pcm, peak }, [pcm.buffer]);
+      peak = 0;
+    }
+    return true;
+  }
+}
+registerProcessor('capture', CaptureProcessor);
+`;
+
+async function beginCapture() {
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+  await audioCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+
   const src = audioCtx.createMediaStreamSource(micStream);
-  node = audioCtx.createScriptProcessor(2048, 1, 1);
-  const ratio = audioCtx.sampleRate / TWILIO_RATE;
-  let pending = [];
+  node = new AudioWorkletNode(audioCtx, 'capture');
 
-  node.onaudioprocess = e => {
+  let sent = 0;
+  node.port.onmessage = ev => {
     if (!running || ws.readyState !== WebSocket.OPEN) return;
-    const input = e.inputBuffer.getChannelData(0);
-
-    let peak = 0;
-    for (let i = 0; i < input.length; i++) peak = Math.max(peak, Math.abs(input[i]));
+    const { pcm, peak } = ev.data;
     level.style.width = Math.min(100, peak * 180) + '%';
 
-    for (let i = 0; i + ratio <= input.length; i += ratio) {
-      let sum = 0, n = 0;
-      for (let j = Math.floor(i); j < Math.floor(i + ratio); j++, n++) sum += input[j];
-      const s = Math.max(-1, Math.min(1, sum / (n || 1)));
-      pending.push(pcm16ToUlaw(Math.round(s < 0 ? s * 0x8000 : s * 0x7fff)));
-    }
+    // mu-law encode on the main thread: cheap, and keeps the worklet minimal.
+    let bin = '';
+    for (let i = 0; i < pcm.length; i++) bin += String.fromCharCode(pcm16ToUlaw(pcm[i]));
+    ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload: btoa(bin) } }));
 
-    while (pending.length >= FRAME) {
-      const frame = pending.slice(0, FRAME);
-      pending = pending.slice(FRAME);
-      let bin = '';
-      for (const b of frame) bin += String.fromCharCode(b);
-      ws.send(JSON.stringify({
-        event: 'media', streamSid, media: { payload: btoa(bin) }
-      }));
-    }
+    if (++sent % 250 === 0) log(`sent ${sent} frames (${(sent * 0.02).toFixed(0)}s of audio)`);
   };
 
   src.connect(node);
-  // ScriptProcessor only runs while connected to the graph. Routed through a
-  // muted gain node so mic audio is never played back into the room.
+  // A worklet needs a path to the destination to be pulled. Muted, so the mic
+  // is never played back into the room.
   const mute = audioCtx.createGain();
   mute.gain.value = 0;
   node.connect(mute); mute.connect(audioCtx.destination);
+  log('capture running on the audio thread (AudioWorklet)');
 }
 
 function stop() {
