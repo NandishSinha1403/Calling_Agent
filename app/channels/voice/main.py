@@ -63,18 +63,50 @@ async def start_call(to: str = Form(...)) -> dict[str, str]:
 
 
 @router.post("/twiml")
-async def twiml() -> Response:
+async def twiml(mode: str = "") -> Response:
     """TwiML telling Twilio to open a bidirectional Media Stream to us.
 
     <Connect><Stream> requires an ABSOLUTE wss:// URL. A relative path or an
     https:// URL fails, sometimes silently. config.websocket_url does that
     conversion in one place and raises on a bad scheme.
     """
+    if mode == "say":
+        # Diagnostic: does TwiML execute at all? If this speaks but <Stream>
+        # produces silence, the fault is specific to Media Streams rather than
+        # to our TwiML being served or parsed.
+        log.info("Serving DIAGNOSTIC <Say> TwiML")
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                "<Response><Say>TwiML is working. If you can hear this, the "
+                "problem is the media stream, not the webhook.</Say>"
+                "<Pause length='2'/></Response>"
+            ),
+            media_type="application/xml",
+        )
+
     try:
         ws_url = settings.websocket_url
     except ConfigError as exc:
         log.error("Cannot build TwiML: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if mode == "start":
+        # Diagnostic: <Start><Stream> is one-way (caller audio to us, nothing
+        # back) and is a DIFFERENT Twilio feature path from <Connect><Stream>.
+        # If the WebSocket connects here but not with <Connect>, the account
+        # can do Media Streams and only bidirectional streaming is blocked.
+        # The <Say> keeps the call alive long enough for the stream to open.
+        log.info("Serving DIAGNOSTIC <Start><Stream> TwiML -> %s", ws_url)
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                f'<Response><Start><Stream url="{ws_url}" /></Start>'
+                "<Say>Testing one way media stream. Please say something now.</Say>"
+                "<Pause length='8'/></Response>"
+            ),
+            media_type="application/xml",
+        )
 
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>'
