@@ -118,6 +118,20 @@ class GeminiLiveSession:
             raise RuntimeError("Session is not open")
         await self._session.send_realtime_input(audio_stream_end=True)
 
+    async def end_audio_stream(self) -> None:
+        """Tell the model the audio stream has stopped.
+
+        Only needed when audio genuinely ENDS -- a finite WAV file, say.
+        Automatic VAD infers end-of-turn from trailing silence, so a stream that
+        simply stops leaves it waiting forever for a pause that never arrives.
+
+        A live phone call never needs this: Twilio streams continuously, silence
+        included, until the caller hangs up.
+        """
+        if self._session is None:
+            raise RuntimeError("Session is not open")
+        await self._session.send_realtime_input(audio_stream_end=True)
+
     async def send_text(self, text: str) -> None:
         """Inject a text turn. Used to make the agent speak first."""
         if self._session is None:

@@ -55,11 +55,19 @@ def _banner(mode: str, model: str) -> None:
 
 
 def _report(first_audio_at: float | None, started: float) -> None:
+    """`started` must be the moment the PERSON STOPPED TALKING.
+
+    Measuring from the start of their speech just adds the length of the
+    utterance and tells you nothing. What matters on a call is the gap between
+    someone finishing a sentence and hearing a reply.
+    """
     print(f"\n{'-' * 62}")
     if first_audio_at is None:
         print("  No audio received. Check the API key and model name.")
     else:
-        print(f"  Time to first audio byte: {(first_audio_at - started) * 1000:.0f} ms")
+        gap = (first_audio_at - started) * 1000
+        print(f"  End of speech -> first audio byte: {gap:.0f} ms")
+        print("  (includes VAD turn-detection + model response time)")
     tickets = get_tickets()
     print(f"  Tool calls recorded: {len(tickets)}")
     for t in tickets:
@@ -96,7 +104,7 @@ async def run_wav(path: Path, out_path: Path) -> None:
         started = time.monotonic()
 
         chunks: list[bytes] = []
-        state: dict[str, float | None] = {"first_audio_at": None}
+        state: dict[str, float | None] = {"first_audio_at": None, "spoke_until": None}
         done = asyncio.Event()
 
         async def send() -> None:
@@ -107,9 +115,16 @@ async def run_wav(path: Path, out_path: Path) -> None:
             for i in range(0, len(pcm), step):
                 await session.send_audio(pcm[i : i + step])
                 await asyncio.sleep(CHUNK_FRAMES / SEND_SAMPLE_RATE)
+            # A live call keeps streaming silence and VAD hears the pause. A
+            # file just stops, so say so explicitly or the model waits forever.
+            await session.end_audio_stream()
+            # The clock that matters starts HERE, not when we began sending.
+            state["spoke_until"] = time.monotonic()
             # A real call keeps streaming silence and VAD hears the pause. A
             # file just stops, so say so explicitly or the model waits forever.
             await session.end_audio_stream()
+            # The clock that matters starts HERE, not when we began sending.
+            state["spoke_until"] = time.monotonic()
 
         async def receive() -> None:
             async for kind, payload in session.events():
@@ -143,7 +158,7 @@ async def run_wav(path: Path, out_path: Path) -> None:
             wf.writeframes(b"".join(chunks))
         print(f"\n  wrote {out_path} ({sum(map(len, chunks)) / (RECV_SAMPLE_RATE * 2):.1f}s)")
 
-    _report(state["first_audio_at"], started)
+    _report(state["first_audio_at"], state["spoke_until"] or started)
 
 
 # ---------------------------------------------------------------------------
