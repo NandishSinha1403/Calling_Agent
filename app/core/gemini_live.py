@@ -133,10 +133,23 @@ class GeminiLiveSession:
         await self._session.send_realtime_input(audio_stream_end=True)
 
     async def send_text(self, text: str) -> None:
-        """Inject a text turn. Used to make the agent speak first."""
+        """Inject a complete text turn. Used to make the agent speak first.
+
+        Uses send_client_content with turn_complete rather than
+        send_realtime_input(text=...). The realtime variant feeds text into the
+        same stream VAD arbitrates, and a turn started that way did not recover
+        when the caller talked over it -- the model went silent for the rest of
+        the call. Since a callee saying "Hello?" while the agent greets is the
+        single most likely thing to happen on a real call, that failure mode had
+        to go. A client-content turn is a discrete, completed turn, which is
+        what a greeting actually is.
+        """
         if self._session is None:
             raise RuntimeError("Session is not open")
-        await self._session.send_realtime_input(text=text)
+        await self._session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=text)]),
+            turn_complete=True,
+        )
 
     async def events(self) -> AsyncIterator[Event]:
         """Yield events until the session ends.
