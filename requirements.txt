@@ -1,0 +1,30 @@
+# Pinned deliberately. The Gemini Live API's SDK surface has moved across recent
+# google-genai releases (model IDs, method names), so an unpinned install can
+# break working code with no local change. Bump versions intentionally, not by
+# accident, and re-run tests/test_gemini_isolated.py after any bump.
+#
+# Requires Python 3.11 or 3.12 — NOT 3.13+.
+#   `audioop` (the core of the audio bridge) was removed from the stdlib in 3.13.
+#   Staying on 3.11 keeps it built in, rather than depending on the audioop-lts
+#   backport, and sidesteps pyaudio wheel problems at the same time.
+
+# --- Gemini Live: native speech-to-speech, no separate STT/TTS step ---
+google-genai==2.19.0
+
+# --- Web layer: serves /call, /twiml and the Media Stream WebSocket ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+websockets==16.1.1
+
+# --- Telephony: outbound PSTN calls via the Twilio REST API ---
+twilio==9.11.0
+
+# --- Config ---
+python-dotenv==1.2.3
+
+# --- Test/dev only ---
+pytest==9.1.1
+# pyaudio powers the isolated mic/speaker test only; nothing in app/ imports it.
+# Needs the portaudio C library first:  brew install portaudio
+# If it will not build, tests/test_gemini_isolated.py --wav runs without it.
+PyAudio==0.2.14
