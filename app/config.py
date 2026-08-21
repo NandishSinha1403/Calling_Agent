@@ -20,6 +20,14 @@ load_dotenv()
 # versioned and rotated, so it is an env var rather than a constant in code.
 DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
 
+# Text model for the WhatsApp channel. Deliberately a *stable* release rather
+# than a preview: unlike the voice path, nothing here needs a preview-only
+# feature, so there is no reason to accept preview churn.
+DEFAULT_TEXT_MODEL = "gemini-3.7-flash"
+
+# Twilio's shared WhatsApp Sandbox number. Same for every sandbox user.
+DEFAULT_WHATSAPP_NUMBER = "whatsapp:+14155238886"
+
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing."""
@@ -50,6 +58,20 @@ class Settings:
     @property
     def gemini_model(self) -> str:
         return os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+
+    @property
+    def gemini_text_model(self) -> str:
+        return os.getenv("GEMINI_TEXT_MODEL", "").strip() or DEFAULT_TEXT_MODEL
+
+    @property
+    def twilio_whatsapp_number(self) -> str:
+        """Sender for WhatsApp replies, in Twilio's `whatsapp:+E164` form."""
+        value = os.getenv("TWILIO_WHATSAPP_NUMBER", "").strip()
+        if not value:
+            return DEFAULT_WHATSAPP_NUMBER
+        # A bare number here is a common slip and fails at send time with an
+        # unhelpful Twilio error, so normalise it now.
+        return value if value.startswith("whatsapp:") else f"whatsapp:{value}"
 
     @property
     def twilio_account_sid(self) -> str:
@@ -114,6 +136,20 @@ class Settings:
             self.twilio_auth_token,
             self.twilio_phone_number,
             self.websocket_url,
+        )
+
+    def require_whatsapp(self) -> None:
+        """Fail now if anything needed to answer a WhatsApp message is missing.
+
+        Separate from require_twilio() even though both use the same Twilio
+        account: a missing TWILIO_PHONE_NUMBER should not stop the WhatsApp
+        channel, and a missing WhatsApp config should not stop a voice call.
+        """
+        _ = (
+            self.gemini_api_key,
+            self.twilio_account_sid,
+            self.twilio_auth_token,
+            self.twilio_whatsapp_number,
         )
 
 
