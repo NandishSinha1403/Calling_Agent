@@ -20,6 +20,7 @@ through TOOL_HANDLERS. One tool code path is worth more than a few saved lines.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from google import genai
@@ -35,6 +36,16 @@ log = logging.getLogger(__name__)
 # Real conversations need one or two rounds; this is a safety net, not a limit
 # anyone should hit.
 MAX_TOOL_ROUNDS = 5
+
+# Twilio gives a webhook about 15 seconds before it gives up, so the model has
+# to answer well inside that. The SDK retries 503s internally for minutes, which
+# is right for a batch job and useless for a live conversation -- a caller
+# waiting on a reply needs an answer or an apology, not a long silence.
+REQUEST_TIMEOUT = 8.0
+
+# Tried in order. gemini-3.7-flash has been returning 503 "high demand"; falling
+# back beats failing, since any answer is better than an apology mid-demo.
+FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.5-flash"]
 
 
 def _config(channel: str = "whatsapp") -> types.GenerateContentConfig:
@@ -61,6 +72,26 @@ class GeminiTextSession:
         self.model = model or settings.gemini_text_model
         self._client = genai.Client(api_key=settings.gemini_api_key)
 
+    async def _generate(self, contents):
+        """Try each model in turn, with a hard timeout on every attempt.
+
+        Returns None if they all fail, so the caller can apologise rather than
+        leave the person with silence.
+        """
+        for model in [self.model, *FALLBACK_MODELS]:
+            try:
+                return await asyncio.wait_for(
+                    self._client.aio.models.generate_content(
+                        model=model, contents=contents, config=_config()
+                    ),
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.warning("%s timed out after %.0fs", model, REQUEST_TIMEOUT)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("%s failed: %s", model, str(exc)[:120])
+        return None
+
     async def reply(
         self, history: list[types.Content], message: str
     ) -> tuple[str, list[types.Content]]:
@@ -75,9 +106,12 @@ class GeminiTextSession:
         )
 
         for round_number in range(MAX_TOOL_ROUNDS):
-            response = await self._client.aio.models.generate_content(
-                model=self.model, contents=contents, config=_config()
-            )
+            response = await self._generate(contents)
+            if response is None:
+                return (
+                    "Sorry, I'm having trouble right now. Could you send that again?",
+                    history,
+                )
 
             candidate = (response.candidates or [None])[0]
             if candidate is None or candidate.content is None:
