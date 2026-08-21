@@ -35,6 +35,7 @@ from app.channels.voice.audio_utils import (
 )
 from app.channels.voice.twilio_call import trigger_call
 from app.config import ConfigError, settings
+from app.event_bus import publish
 from app.core.gemini_live import GeminiLiveSession
 
 log = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ async def media_stream(ws: WebSocket) -> None:
     """
     await ws.accept()
     log.info("Media stream connected (echo=%s)", _echo_mode())
+    publish("call_started", echo=_echo_mode())
 
     if _echo_mode():
         await _run_echo(ws)
@@ -271,10 +273,13 @@ async def media_stream(ws: WebSocket) -> None:
                 # over the caller for the length of the buffer.
                 await clear_playback()
                 log.info("Barge-in: cleared queued audio")
+                publish("interrupted")
             elif kind == "transcript":
                 log.info("agent: %s", payload)
+                publish("transcript", speaker="agent", text=payload)
             elif kind == "input_transcript":
                 log.info("caller: %s", payload)
+                publish("transcript", speaker="caller", text=payload)
 
     try:
         # Connect to Gemini FIRST, before Twilio's start event arrives.
@@ -300,6 +305,7 @@ async def media_stream(ws: WebSocket) -> None:
             state["frames_in"],
             state["frames_out"],
         )
+        publish("call_ended", frames_in=state["frames_in"], frames_out=state["frames_out"])
 
 
 async def _run_echo(ws: WebSocket) -> None:
