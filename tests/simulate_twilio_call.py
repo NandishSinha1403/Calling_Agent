@@ -63,11 +63,16 @@ def wav_to_ulaw_frames(path: Path) -> list[bytes]:
     ]
 
 
-async def simulate(url: str, wav: Path | None, out: Path, listen: float) -> None:
+async def simulate(
+    url: str, wav: Path | None, out: Path, listen: float,
+    interrupt_wav: Path | None = None,
+) -> None:
     frames = wav_to_ulaw_frames(wav) if wav else []
+    interrupt_frames = wav_to_ulaw_frames(interrupt_wav) if interrupt_wav else []
     stream_sid = "MZsimulated00000000000000000000000"
     received: list[bytes] = []
     first_reply_at: float | None = None
+    cleared = {"count": 0}
 
     print(f"\n  connecting to {url}")
     async with websockets.connect(url, max_size=None) as ws:
@@ -111,7 +116,8 @@ async def simulate(url: str, wav: Path | None, out: Path, listen: float) -> None
                     received.append(base64.b64decode(msg["media"]["payload"]))
                 elif msg.get("event") == "clear":
                     # Barge-in: the bridge is telling Twilio to drop queued audio.
-                    print(f"  <- clear (barge-in) after {len(received)} frames")
+                    print(f"  <- CLEAR received (barge-in) after {len(received)} frames")
+                    cleared["count"] += 1
                     received.clear()
 
         reader = asyncio.create_task(read())
@@ -134,8 +140,39 @@ async def simulate(url: str, wav: Path | None, out: Path, listen: float) -> None
         print(f"  sent {len(frames)} frames ({len(frames) * FRAME_SECONDS:.1f}s of audio)")
 
         if listen:
-            print(f"  listening {listen:.0f}s for a reply...")
-            await asyncio.sleep(listen)
+            # Keep streaming SILENCE, exactly as a real call does. Twilio never
+            # stops sending until hangup, and server-side VAD detects
+            # end-of-turn from that trailing silence. A simulator that simply
+            # stops is not a faithful simulation: the model waits forever for a
+            # pause that never arrives.
+            print(f"  streaming silence for {listen:.0f}s, listening for a reply...")
+            silent_frame = base64.b64encode(pcm16_to_ulaw(b"\x00\x00" * TWILIO_FRAME_BYTES)).decode()
+            deadline = time.monotonic() + listen
+            interrupted_yet = False
+            while time.monotonic() < deadline:
+                # Barge-in test: once the agent is a little way into speaking,
+                # talk over it. A real caller does this constantly.
+                if interrupt_frames and not interrupted_yet and len(received) > 40:
+                    print(f"  -> INTERRUPTING after {len(received)} frames of agent audio")
+                    interrupted_yet = True
+                    for frame in interrupt_frames:
+                        await ws.send(
+                            json.dumps({
+                                "event": "media",
+                                "streamSid": stream_sid,
+                                "media": {"payload": base64.b64encode(frame).decode()},
+                            })
+                        )
+                        await asyncio.sleep(FRAME_SECONDS)
+                    continue
+                await ws.send(
+                    json.dumps({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": silent_frame},
+                    })
+                )
+                await asyncio.sleep(FRAME_SECONDS)
 
         stop_reading.set()
         await reader
@@ -143,6 +180,9 @@ async def simulate(url: str, wav: Path | None, out: Path, listen: float) -> None
 
     print(f"\n{'-' * 62}")
     print(f"  frames received: {len(received)}")
+    if interrupt_frames:
+        verdict = "PASS" if cleared["count"] else "FAIL -- agent kept talking over the caller"
+        print(f"  barge-in:        {cleared['count']} clear event(s) -- {verdict}")
     if received:
         pcm = ulaw_to_pcm16(b"".join(received))
         seconds = len(pcm) / (TWILIO_RATE * 2)
@@ -173,12 +213,14 @@ def main() -> None:
     ap.add_argument("--url", default="ws://localhost:8000/ws/media-stream")
     ap.add_argument("--wav", type=Path, help="audio to send as the caller")
     ap.add_argument("--out", type=Path, default=Path("caller_heard.wav"))
+    ap.add_argument("--interrupt-wav", type=Path,
+                    help="talk over the agent with this audio, to test barge-in")
     ap.add_argument("--listen", type=float, default=0.0,
                     help="seconds to keep listening after sending (use ~15 for the Gemini bridge)")
     args = ap.parse_args()
     if args.wav and not args.wav.exists():
         raise SystemExit(f"No such file: {args.wav}")
-    asyncio.run(simulate(args.url, args.wav, args.out, args.listen))
+    asyncio.run(simulate(args.url, args.wav, args.out, args.listen, args.interrupt_wav))
 
 
 if __name__ == "__main__":
