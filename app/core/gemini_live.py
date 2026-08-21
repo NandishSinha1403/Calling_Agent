@@ -25,7 +25,7 @@ from google import genai
 from google.genai import types
 
 from app.config import settings
-from app.core.persona import SYSTEM_PROMPT
+from app.core.persona import system_prompt
 from app.core.tools import TOOL_DECLARATIONS, execute_tool
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ Event = tuple[
 def _build_config() -> types.LiveConnectConfig:
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt("voice"),
         tools=[{"function_declarations": TOOL_DECLARATIONS}],
         # Transcription is for us, not the caller. Native-audio models return
         # audio only, so without this a confusing call leaves no readable

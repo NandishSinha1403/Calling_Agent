@@ -87,4 +87,42 @@ are rescheduling, "low" if they simply confirmed.
 Close by telling them what will happen next, then say goodbye.
 """
 
-SYSTEM_PROMPT = f"{BASE_RULES}\n{PERSONA}"
+# --------------------------------------------------------------------------
+# Channel notes.
+#
+# The same brain speaks over a phone call and over WhatsApp, but the medium
+# genuinely differs: "no lists or markdown" is right for speech and needlessly
+# limiting in text, and an agent that says "I'm calling you" in a chat window
+# sounds broken.
+#
+# These live HERE, in the brain, not in the channels. A channel passes only its
+# own name -- it never contains wording. That keeps the boundary intact: still
+# two files to edit for a new problem statement, and still nothing
+# domain-specific under app/channels/.
+# --------------------------------------------------------------------------
+CHANNEL_NOTES = {
+    "voice": """
+THIS CONVERSATION IS A PHONE CALL.
+- You are speaking aloud. Everything above about spoken conversation applies.
+- The person cannot see anything. Never refer to something on screen.
+- If the line is unclear, ask them to repeat rather than guessing.
+""",
+    "whatsapp": """
+THIS CONVERSATION IS A WHATSAPP CHAT.
+- You are writing, not speaking. Do not say you are calling.
+- Keep messages short -- a couple of sentences. This is a chat, not an email.
+- A short list is fine here when it genuinely helps, but never headings or
+  heavy formatting.
+- The person may reply hours later. Do not assume they are waiting.
+- Never ask them to "press" or "say" anything. They type.
+""",
+}
+
+
+def system_prompt(channel: str = "voice") -> str:
+    """Full prompt for a channel: rules, then persona, then the channel note."""
+    return f"{BASE_RULES}\n{PERSONA}\n{CHANNEL_NOTES.get(channel, '')}"
+
+
+# Kept for anything that wants the voice prompt directly.
+SYSTEM_PROMPT = system_prompt("voice")
