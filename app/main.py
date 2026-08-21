@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.channels.voice.main import router as voice_router
+from app.channels.whatsapp.main import router as whatsapp_router
 from app.config import ConfigError, settings
 
 logging.basicConfig(
@@ -45,7 +46,7 @@ app = FastAPI(
 )
 
 app.include_router(voice_router)
-# The WhatsApp router mounts here in Phase B, after voice is fully working.
+app.include_router(whatsapp_router)
 
 
 @app.get("/health")
