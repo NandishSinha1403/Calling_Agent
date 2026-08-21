@@ -125,21 +125,13 @@ def test_webhook_acknowledges_immediately(client, monkeypatch):
         async def reply(self, history, message):
             return ("hello there", list(history) + [message])
 
-    sent = []
-
-    async def fake_send(session, body):
-        sent.append((session.sender, body))
-        return "SM123"
-
     monkeypatch.setattr(wa, "_model", lambda: FakeModel())
-    monkeypatch.setattr(wa, "send_reply", fake_send)
-
     resp = client.post(
         "/whatsapp/incoming",
         data={"From": "whatsapp:+15551234567", "Body": "hi"},
     )
     assert resp.status_code == 200
-    assert sent == [("whatsapp:+15551234567", "hello there")]
+    assert "<Message>hello there</Message>" in resp.text
 
 
 def test_webhook_keeps_history_across_messages(client, monkeypatch):
@@ -151,10 +143,6 @@ def test_webhook_keeps_history_across_messages(client, monkeypatch):
             return (f"turn {len(history) + 1}", list(history) + [message])
 
     monkeypatch.setattr(wa, "_model", lambda: FakeModel())
-    monkeypatch.setattr(wa, "send_reply", lambda s, b: _noop())
-
-    async def _noop():
-        return "SM"
 
     for text in ("one", "two", "three"):
         client.post("/whatsapp/incoming", data={"From": "whatsapp:+1", "Body": text})
@@ -170,53 +158,39 @@ def test_model_failure_still_replies(client, monkeypatch):
         async def reply(self, history, message):
             raise RuntimeError("model exploded")
 
-    sent = []
-
-    async def fake_send(session, body):
-        sent.append(body)
-        return "SM"
-
     monkeypatch.setattr(wa, "_model", lambda: Broken())
-    monkeypatch.setattr(wa, "send_reply", fake_send)
-
     resp = client.post("/whatsapp/incoming", data={"From": "whatsapp:+1", "Body": "hi"})
     assert resp.status_code == 200
-    assert sent and "went wrong" in sent[0].lower()
+    assert "went wrong" in resp.text.lower()
 
 
-def test_closed_window_does_not_crash_the_webhook(client, monkeypatch):
-    """Refusing to send is expected behaviour, not an error to propagate."""
+def test_reply_is_twiml_and_xml_escaped(client, monkeypatch):
+    """Replies go back as TwiML, not via the REST API.
+
+    The Sandbox rejects free-form outbound messages with "ContentSid Required" —
+    it wants a pre-approved template — but a TwiML reply is part of the inbound
+    session and carries no such restriction.
+
+    Escaping matters: a model reply containing & or < would otherwise produce
+    malformed XML and Twilio would silently send nothing.
+    """
     import app.channels.whatsapp.main as wa
-    from app.channels.whatsapp.whatsapp_client import WindowClosedError
 
     class FakeModel:
         async def reply(self, history, message):
-            return ("hi", list(history))
-
-    async def refuse(session, body):
-        raise WindowClosedError(session.sender)
+            return ("Tom & Jerry <3", list(history))
 
     monkeypatch.setattr(wa, "_model", lambda: FakeModel())
-    monkeypatch.setattr(wa, "send_reply", refuse)
-
     resp = client.post("/whatsapp/incoming", data={"From": "whatsapp:+1", "Body": "hi"})
     assert resp.status_code == 200
+    assert "<Message>Tom &amp; Jerry &lt;3</Message>" in resp.text
 
 
-def test_empty_body_is_handled(client, monkeypatch):
+def test_empty_body_is_handled(client):
     """A media-only message has no Body; do not send the model an empty prompt."""
-    import app.channels.whatsapp.main as wa
-
-    sent = []
-
-    async def fake_send(session, body):
-        sent.append(body)
-        return "SM"
-
-    monkeypatch.setattr(wa, "send_reply", fake_send)
     resp = client.post("/whatsapp/incoming", data={"From": "whatsapp:+1", "Body": "   "})
     assert resp.status_code == 200
-    assert sent and "text" in sent[0].lower()
+    assert "text messages" in resp.text
 
 
 # ---------------------------------------------------------------------------

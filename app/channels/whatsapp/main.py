@@ -19,8 +19,9 @@ import logging
 from fastapi import APIRouter, Form
 from fastapi.responses import Response
 
-from app.channels.whatsapp.session_store import get_session, total_sent
-from app.channels.whatsapp.whatsapp_client import WindowClosedError, send_reply
+from xml.sax.saxutils import escape
+
+from app.channels.whatsapp.session_store import get_session
 from app.core.gemini_text import GeminiTextSession
 
 log = logging.getLogger(__name__)
@@ -57,11 +58,11 @@ async def incoming(From: str = Form(...), Body: str = Form(default="")) -> Respo
     if not text:
         # Media-only message. We are text-only for now; say so rather than
         # sending the model an empty prompt.
-        try:
-            await send_reply(session, "I can only read text messages at the moment.")
-        except WindowClosedError:
-            pass
-        return Response(content="<Response/>", media_type="application/xml")
+        return Response(
+            content="<Response><Message>I can only read text messages at the "
+                    "moment.</Message></Response>",
+            media_type="application/xml",
+        )
 
     try:
         reply, history = await _model().reply(session.history, text)
@@ -72,12 +73,12 @@ async def incoming(From: str = Form(...), Body: str = Form(default="")) -> Respo
         log.exception("Model failed for %s", sender)
         reply = "Sorry, something went wrong on my end. Could you try again?"
 
-    try:
-        await send_reply(session, reply)
-    except WindowClosedError:
-        log.error("Reply dropped for %s: window closed", sender)
-    except Exception:  # noqa: BLE001
-        log.exception("Failed to send reply to %s", sender)
-
-    log.info("agent -> %s: %r (%d sent this run)", sender, reply, total_sent())
-    return Response(content="<Response/>", media_type="application/xml")
+    # Reply as TwiML rather than via the REST API. The Sandbox rejects
+    # free-form outbound messages with "ContentSid Required" -- it wants a
+    # pre-approved template -- but a TwiML reply is part of the inbound session
+    # and carries no such restriction. It is also one fewer API call.
+    log.info("agent -> %s: %r", sender, reply)
+    return Response(
+        content=f"<Response><Message>{escape(reply)}</Message></Response>",
+        media_type="application/xml",
+    )
