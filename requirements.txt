@@ -15,6 +15,9 @@ google-genai==2.19.0
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 websockets==16.1.1
+# Form parsing for Twilio webhooks -- both /call and, later, the WhatsApp
+# webhook receive form-encoded bodies rather than JSON.
+python-multipart==0.0.32
 
 # --- Telephony: outbound PSTN calls via the Twilio REST API ---
 twilio==9.11.0
